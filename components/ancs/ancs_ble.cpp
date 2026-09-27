@@ -93,6 +93,8 @@ struct ConnState {
   uint16_t ancs_start{0}, ancs_end{0}, ams_start{0}, ams_end{0};
   uint16_t ams_remote_command_handle{0};
   uint16_t ams_entity_update_handle{0};
+  uint16_t ams_entity_update_cccd_handle{0};
+  uint16_t ams_entity_update_end_handle{0};
   uint16_t ams_entity_attribute_handle{0};
   uint8_t setup_step{0};
   bool discovering_ams{false};
@@ -347,6 +349,8 @@ static int on_disc_svc(uint16_t conn_handle, const struct ble_gatt_error *error,
                        void *arg);
 static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error, const struct ble_gatt_chr *chr,
                        void *arg);
+static int on_disc_ams_dsc(uint16_t conn_handle, const struct ble_gatt_error *error, uint16_t chr_val_handle,
+                           const struct ble_gatt_dsc *dsc, void *arg);
 static void setup_next(uint16_t conn_handle);
 static void finish_discovery(uint16_t conn_handle);
 static void start_advertising();
@@ -384,7 +388,7 @@ static int read_device_name_cb(uint16_t conn_handle, const struct ble_gatt_error
 static int setup_write_cb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr,
                           void *arg) {
   (void) attr;
-  (void) arg;
+  (void)arg;
   ConnState *slot = find_slot(conn_handle);
   if (!slot) return 0;
   uint8_t completed = slot->setup_step - 1;
@@ -415,8 +419,8 @@ static void setup_next(uint16_t conn_handle) {
     uint16_t len = sizeof(cccd);
     if (step == 0 && slot->ns_handle) handle = slot->ns_handle + 1;
     if (step == 1 && slot->ds_handle) handle = slot->ds_handle + 1;
-    if (step >= 2 && !slot->ams_entity_update_handle) continue;
-    if (step == 2) handle = slot->ams_entity_update_handle + 1;
+    if (step >= 2 && !slot->ams_entity_update_cccd_handle) continue;
+    if (step == 2) handle = slot->ams_entity_update_cccd_handle;
     if (step == 3) { handle = slot->ams_entity_update_handle; data = player; len = sizeof(player); }
     if (step == 4) { handle = slot->ams_entity_update_handle; data = track; len = sizeof(track); }
     if (!handle) continue;
@@ -659,6 +663,47 @@ static int on_disc_svc(uint16_t conn_handle, const struct ble_gatt_error *error,
 }
 
 // ---------------------------------------------------------------------------
+// The AMS CCCD need not immediately follow the Entity Update value.
+// ---------------------------------------------------------------------------
+static int on_disc_ams_dsc(uint16_t conn_handle, const struct ble_gatt_error *error, uint16_t chr_val_handle,
+                           const struct ble_gatt_dsc *dsc, void *arg) {
+  (void) arg;
+  ConnState *slot = find_slot(conn_handle);
+  if (!slot) return 0;
+  if (error->status != 0) {
+    if (error->status != BLE_HS_EDONE)
+      ESP_LOGW(TAG, "AMS descriptor discovery failed status=%d; ANCS continues", error->status);
+    if (!slot->ams_entity_update_cccd_handle)
+      ESP_LOGW(TAG, "AMS Entity Update CCCD missing; ANCS continues");
+    finish_discovery(conn_handle);
+    return 0;
+  }
+  if (chr_val_handle == slot->ams_entity_update_handle && ble_uuid_u16(&dsc->uuid.u) == BLE_GATT_DSC_CLT_CFG_UUID16) {
+    slot->ams_entity_update_cccd_handle = dsc->handle;
+    ESP_LOGI(TAG, "AMS Entity Update CCCD found handle=%u", dsc->handle);
+  }
+  return 0;
+}
+
+static void finish_discovery(uint16_t conn_handle) {
+  ConnState *slot = find_slot(conn_handle);
+  if (!slot) return;
+  // Name read and subsequent CCCD writes are serialized on this connection.
+  slot->peer_name_buf[0] = '\0';
+  int rc = ble_gattc_read_by_uuid(conn_handle, 1, 0xFFFF, u16p(&s_uuid_device_name), read_device_name_cb, nullptr);
+  if (rc != 0) {
+    ESP_LOGW(TAG, "device name read failed rc=%d — writing CCCDs and connecting anyway", rc);
+    slot->ancs_ready = true;
+    BleEvent ev{};
+    ev.type = BleEventType::CONNECTED;
+    ev.device_name = "iPhone";
+    push_event(ev);
+    ESP_LOGI(TAG, "ANCS ready — connected to: iPhone");
+    setup_next(conn_handle);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GATT characteristic discovery callback
 // ---------------------------------------------------------------------------
 static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error, const struct ble_gatt_chr *chr,
@@ -685,27 +730,19 @@ static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error,
     }
     ESP_LOGI(TAG, "ANCS chars done: ns=%u cp=%u ds=%u", slot->ns_handle, slot->cp_handle, slot->ds_handle);
 
-    // Read device name BEFORE writing CCCDs. NimBLE allows only one GATTC
-    // procedure at a time per connection; starting two CCCD writes and then
-    // immediately issuing a read returns BLE_HS_EBUSY (rc=6) and falls back
-    // to "iPhone". CCCDs are written from read_device_name_cb once the read
-    // completes, so there is never a competing procedure.
-    slot->peer_name_buf[0] = '\0';
-    int rc = ble_gattc_read_by_uuid(conn_handle, 1, 0xFFFF, u16p(&s_uuid_device_name), read_device_name_cb, nullptr);
-    if (rc != 0) {
-      ESP_LOGW(TAG, "device name read failed rc=%d — writing CCCDs and connecting anyway", rc);
-      slot->ancs_ready = true;
-      BleEvent ev{};
-      ev.type = BleEventType::CONNECTED;
-      ev.device_name = "iPhone";
-      push_event(ev);
-      ESP_LOGI(TAG, "ANCS ready — connected to: iPhone");
-      setup_next(conn_handle);
+    if (slot->ams_entity_update_handle &&
+        slot->ams_entity_update_end_handle > slot->ams_entity_update_handle) {
+      int rc = ble_gattc_disc_all_dscs(conn_handle, slot->ams_entity_update_handle,
+                                        slot->ams_entity_update_end_handle, on_disc_ams_dsc, nullptr);
+      if (rc == 0) return 0;
+      ESP_LOGW(TAG, "AMS descriptor discovery could not start rc=%d; ANCS continues", rc);
     }
+    finish_discovery(conn_handle);
     return 0;
   }
   if (error->status != 0) {
     ESP_LOGW(TAG, "chr disc error status=%d", error->status);
+    if (slot->discovering_ams) finish_discovery(conn_handle);
     return 0;
   }
 
@@ -715,9 +752,14 @@ static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error,
   // nimble_host task during the discovery burst, which interleaves with the
   // main-loop logger on the UART and corrupts the serial stream at VERBOSE.
   if (slot->discovering_ams) {
+    if (slot->ams_entity_update_handle && chr->def_handle > slot->ams_entity_update_handle &&
+        chr->def_handle - 1 < slot->ams_entity_update_end_handle)
+      slot->ams_entity_update_end_handle = chr->def_handle - 1;
     if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_remote_uuid)) == 0) slot->ams_remote_command_handle = chr->val_handle;
-    else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_update_uuid)) == 0) slot->ams_entity_update_handle = chr->val_handle;
-    else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_attribute_uuid)) == 0) slot->ams_entity_attribute_handle = chr->val_handle;
+    else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_update_uuid)) == 0) {
+      slot->ams_entity_update_handle = chr->val_handle;
+      slot->ams_entity_update_end_handle = slot->ams_end;
+    } else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_attribute_uuid)) == 0) slot->ams_entity_attribute_handle = chr->val_handle;
   } else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_notif_src_uuid)) == 0) {
     slot->ns_handle = chr->val_handle;
   } else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ctrl_point_uuid)) == 0) {
