@@ -8,6 +8,16 @@ from esphome import automation
 from esphome.components.esp32 import add_idf_sdkconfig_option
 from esphome.const import CONF_ID, CONF_NAME, CONF_TRIGGER_ID
 
+try:
+    from esphome.components.esp32 import request_bluetooth
+except ImportError:
+    # ESPHome versions before 2026.9 included bt by default.
+    from esphome.components.esp32 import include_builtin_idf_component
+
+    def request_bluetooth():
+        include_builtin_idf_component("bt")
+
+
 CODEOWNERS = ["@wonderslug"]
 DEPENDENCIES = ["esp32"]
 
@@ -118,6 +128,9 @@ FINAL_VALIDATE_SCHEMA = _validate_no_bluedroid_ble
 
 
 async def to_code(config):
+    # ESPHome 2026.9 excludes the ESP-IDF bt component unless explicitly
+    # requested. NimBLE headers and the controller must be available to ANCS.
+    request_bluetooth()
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     if CONF_NAME in config:

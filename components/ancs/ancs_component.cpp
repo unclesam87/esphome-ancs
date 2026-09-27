@@ -4,6 +4,7 @@
 #include "ancs_component.h"
 #include "ancs_name_resolver.h"
 #include "ams_protocol.h"
+#include "sdkconfig.h"
 #include <cmath>
 #include <cstdlib>
 #include <limits>
