@@ -3,6 +3,10 @@
 
 #include "ancs_component.h"
 #include "ancs_name_resolver.h"
+#include "ams_protocol.h"
+#include <cmath>
+#include <cstdlib>
+#include <limits>
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
@@ -18,6 +22,7 @@ void AncsComponent::setup() {
   cfg.manufacturer = manufacturer_;
   cfg.model = model_;
   cfg.auto_fetch = auto_fetch_;
+  cfg.ams = ams_;
   cfg.fetch_attributes = fetch_attrs_;
   ble_.init(cfg);
   ble_initialized_ = true;
@@ -26,6 +31,8 @@ void AncsComponent::setup() {
     connected_bs_->publish_initial_state(false);
   if (call_active_bs_)
     call_active_bs_->publish_initial_state(false);
+  if (media_playing_bs_ && ams_)
+    media_playing_bs_->publish_initial_state(false);
 #endif
 #ifdef USE_TEXT_SENSOR
   publish_advertised_name_();
@@ -64,9 +71,22 @@ void AncsComponent::loop() {
 #endif
         if (connected_count_ == 0) {
           connected_device_name_ = "";
+#ifdef USE_BINARY_SENSOR
+          if (media_playing_bs_) media_playing_bs_->publish_state(false);
+#endif
 #ifdef USE_TEXT_SENSOR
           if (connected_device_ts_)
             connected_device_ts_->publish_state("");
+          if (media_player_ts_) media_player_ts_->publish_state("");
+          if (media_title_ts_) media_title_ts_->publish_state("");
+          if (media_artist_ts_) media_artist_ts_->publish_state("");
+          if (media_album_ts_) media_album_ts_->publish_state("");
+          if (media_playback_state_ts_) media_playback_state_ts_->publish_state("");
+#endif
+#ifdef USE_SENSOR
+          if (media_position_s_) media_position_s_->publish_state(NAN);
+          if (media_duration_s_) media_duration_s_->publish_state(NAN);
+          if (media_playback_rate_s_) media_playback_rate_s_->publish_state(NAN);
 #endif
         }
 #ifdef USE_BINARY_SENSOR
@@ -121,6 +141,44 @@ void AncsComponent::loop() {
 #endif
         on_attributes_.call(ev.uid, cat, ev.app_id, ev.title, ev.subtitle, ev.message, ev.device_name, ev.date);
         break;
+
+      case BleEventType::AMS_UPDATE:
+        if (ev.ams_entity == 0 && ev.ams_attribute == 0) {
+#ifdef USE_TEXT_SENSOR
+          if (media_player_ts_) media_player_ts_->publish_state(ev.ams_value);
+#endif
+        } else if (ev.ams_entity == 0 && ev.ams_attribute == 1) {
+          ams::PlaybackInfo info;
+          if (!ams::parse_playback_info(ev.ams_value, info)) break;
+          ESP_LOGI(TAG, "AMS Playback State = %s, Rate = %.3f, Elapsed Time = %.1f",
+                   ams::playback_state_name(info.state), info.rate, info.elapsed);
+#ifdef USE_BINARY_SENSOR
+          if (media_playing_bs_) media_playing_bs_->publish_state(info.state == ams::PlaybackState::PLAYING);
+#endif
+#ifdef USE_TEXT_SENSOR
+          if (media_playback_state_ts_) media_playback_state_ts_->publish_state(ams::playback_state_name(info.state));
+#endif
+#ifdef USE_SENSOR
+          if (media_position_s_) media_position_s_->publish_state(info.elapsed);
+          if (media_playback_rate_s_) media_playback_rate_s_->publish_state(info.rate);
+#endif
+        } else if (ev.ams_entity == 2) {
+#ifdef USE_TEXT_SENSOR
+          if (ev.ams_attribute == 0 && media_artist_ts_) media_artist_ts_->publish_state(ev.ams_value);
+          if (ev.ams_attribute == 1 && media_album_ts_) media_album_ts_->publish_state(ev.ams_value);
+          if (ev.ams_attribute == 2 && media_title_ts_) media_title_ts_->publish_state(ev.ams_value);
+#endif
+          if (ev.ams_attribute == 3) {
+            char *end = nullptr;
+            float duration = std::strtof(ev.ams_value.c_str(), &end);
+            if (end != ev.ams_value.c_str() && *end == '\0' && std::isfinite(duration) && duration >= 0) {
+#ifdef USE_SENSOR
+              if (media_duration_s_) media_duration_s_->publish_state(duration);
+#endif
+            } else ESP_LOGW(TAG, "AMS invalid Track.Duration: %s", ev.ams_value.c_str());
+          }
+        }
+        break;
     }
   }
 }
@@ -129,6 +187,7 @@ void AncsComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Advertised name: %s", resolve_name().c_str());
   ESP_LOGCONFIG(TAG, "  Name source: %s", name_configured_ ? "configured" : "esphome node name");
   ESP_LOGCONFIG(TAG, "  Auto fetch attributes: %s", YESNO(auto_fetch_));
+  ESP_LOGCONFIG(TAG, "  AMS: %s", YESNO(ams_));
   ESP_LOGCONFIG(TAG, "  Max connections: %d", CONFIG_BT_NIMBLE_MAX_CONNECTIONS);
 }
 

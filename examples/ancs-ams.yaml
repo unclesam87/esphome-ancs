@@ -1,0 +1,51 @@
+esphome:
+  name: iphone-ams
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source: github://unclesam87/esphome-ancs@master
+    components: [ancs]
+
+ancs:
+  id: my_ancs
+  name: "ANCS HA Bridge"
+  ams: true
+
+binary_sensor:
+  - platform: ancs
+    ancs_id: my_ancs
+    connected:
+      name: "iPhone Connected"
+    media_playing:
+      name: "iPhone Media Playing"
+
+text_sensor:
+  - platform: ancs
+    ancs_id: my_ancs
+    media_player:
+      name: "iPhone Media Player"
+    media_title:
+      name: "iPhone Media Title"
+    media_artist:
+      name: "iPhone Media Artist"
+    media_album:
+      name: "iPhone Media Album"
+    media_playback_state:
+      name: "iPhone Playback State"
+
+sensor:
+  - platform: ancs
+    ancs_id: my_ancs
+    media_position:
+      name: "iPhone Media Position"
+    media_duration:
+      name: "iPhone Media Duration"
+    media_playback_rate:
+      name: "iPhone Playback Rate"

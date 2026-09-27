@@ -12,7 +12,7 @@ namespace esphome {
 namespace ancs {
 
 // POD events marshaled from the NimBLE host task to the ESPHome loop.
-enum class BleEventType { CONNECTED, DISCONNECTED, NOTIF_ADDED, NOTIF_MODIFIED, NOTIF_REMOVED, ATTRIBUTES };
+enum class BleEventType { CONNECTED, DISCONNECTED, NOTIF_ADDED, NOTIF_MODIFIED, NOTIF_REMOVED, ATTRIBUTES, AMS_UPDATE };
 
 struct BleEvent {
   BleEventType type;
@@ -28,6 +28,9 @@ struct BleEvent {
   // Populated only on CONNECTED: the iPhone's own name from the GAP
   // Device Name characteristic (0x2A00), e.g. "Brian's iPhone".
   std::string device_name;
+  uint8_t ams_entity{0};
+  uint8_t ams_attribute{0};
+  std::string ams_value;
 };
 
 // Configuration passed from the component into the BLE layer.
@@ -36,6 +39,7 @@ struct BleConfig {
   std::string manufacturer;
   std::string model;
   bool auto_fetch{true};
+  bool ams{false};
   std::vector<protocol::AttributeId> fetch_attributes;
 };
 

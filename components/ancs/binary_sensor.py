@@ -10,12 +10,14 @@ from . import AncsComponent
 CONF_ANCS_ID = "ancs_id"
 CONF_CONNECTED = "connected"
 CONF_CALL_ACTIVE = "call_active"
+CONF_MEDIA_PLAYING = "media_playing"
 
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_ANCS_ID): cv.use_id(AncsComponent),
         cv.Optional(CONF_CONNECTED): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_CALL_ACTIVE): binary_sensor.binary_sensor_schema(),
+        cv.Optional(CONF_MEDIA_PLAYING): binary_sensor.binary_sensor_schema(),
     }
 )
 
@@ -28,3 +30,6 @@ async def to_code(config):
     if CONF_CALL_ACTIVE in config:
         s = await binary_sensor.new_binary_sensor(config[CONF_CALL_ACTIVE])
         cg.add(parent.set_call_active_binary_sensor(s))
+    if CONF_MEDIA_PLAYING in config:
+        s = await binary_sensor.new_binary_sensor(config[CONF_MEDIA_PLAYING])
+        cg.add(parent.set_media_playing_binary_sensor(s))

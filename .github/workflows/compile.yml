@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: tests/.esphome
-          key: esphome-build-${{ runner.os }}-${{ hashFiles('components/ancs/**', 'tests/test-ancs.yaml') }}
+          key: esphome-build-${{ runner.os }}-${{ hashFiles('components/ancs/**', 'tests/test-ancs.yaml', 'tests/test-ams.yaml') }}
           restore-keys: esphome-build-${{ runner.os }}-
 
       - name: Install ESPHome
@@ -42,9 +42,13 @@ jobs:
       # Fast schema + codegen validation — catches Python errors in __init__.py
       # before spending time on a full compile.
       - name: Validate config
-        run: esphome config tests/test-ancs.yaml
+        run: |
+          esphome config tests/test-ancs.yaml
+          esphome config tests/test-ams.yaml
 
       # Full compile: C++ compilation + link. Confirms the component builds
       # cleanly against ESP-IDF and that no NimBLE symbols are missing.
       - name: Compile firmware
-        run: esphome compile tests/test-ancs.yaml
+        run: |
+          esphome compile tests/test-ancs.yaml
+          esphome compile tests/test-ams.yaml
