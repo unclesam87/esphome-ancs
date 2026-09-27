@@ -10,6 +10,9 @@
 #ifdef USE_TEXT_SENSOR
 #include "esphome/components/text_sensor/text_sensor.h"
 #endif
+#ifdef USE_SENSOR
+#include "esphome/components/sensor/sensor.h"
+#endif
 #include "ancs_ble.h"
 #include "ancs_protocol.h"
 #include <functional>
@@ -30,6 +33,7 @@ class AncsComponent : public Component {
   void set_name_configured(bool configured) { name_configured_ = configured; }
   void set_name_suffix(const std::string &suffix);
   void set_auto_fetch(bool b) { auto_fetch_ = b; }
+  void set_ams(bool b) { ams_ = b; }
   void set_manufacturer(const std::string &m) { manufacturer_ = m; }
   void set_model(const std::string &m) { model_ = m; }
   void add_fetch_attribute(protocol::AttributeId a) { fetch_attrs_.push_back(a); }
@@ -37,6 +41,7 @@ class AncsComponent : public Component {
 #ifdef USE_BINARY_SENSOR
   void set_connected_binary_sensor(binary_sensor::BinarySensor *s) { connected_bs_ = s; }
   void set_call_active_binary_sensor(binary_sensor::BinarySensor *s) { call_active_bs_ = s; }
+  void set_media_playing_binary_sensor(binary_sensor::BinarySensor *s) { media_playing_bs_ = s; }
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_connected_device_text_sensor(text_sensor::TextSensor *s) { connected_device_ts_ = s; }
@@ -45,6 +50,16 @@ class AncsComponent : public Component {
   void set_last_app_id_text_sensor(text_sensor::TextSensor *s) { last_app_id_ts_ = s; }
   void set_last_caller_text_sensor(text_sensor::TextSensor *s) { last_caller_ts_ = s; }
   void set_advertised_name_text_sensor(text_sensor::TextSensor *s) { advertised_name_ts_ = s; }
+  void set_media_player_text_sensor(text_sensor::TextSensor *s) { media_player_ts_ = s; }
+  void set_media_title_text_sensor(text_sensor::TextSensor *s) { media_title_ts_ = s; }
+  void set_media_artist_text_sensor(text_sensor::TextSensor *s) { media_artist_ts_ = s; }
+  void set_media_album_text_sensor(text_sensor::TextSensor *s) { media_album_ts_ = s; }
+  void set_media_playback_state_text_sensor(text_sensor::TextSensor *s) { media_playback_state_ts_ = s; }
+#endif
+#ifdef USE_SENSOR
+  void set_media_position_sensor(sensor::Sensor *s) { media_position_s_ = s; }
+  void set_media_duration_sensor(sensor::Sensor *s) { media_duration_s_ = s; }
+  void set_media_playback_rate_sensor(sensor::Sensor *s) { media_playback_rate_s_ = s; }
 #endif
 
   void add_on_connect_callback(std::function<void(const std::string &)> cb) { on_connect_.add(std::move(cb)); }
@@ -89,6 +104,7 @@ class AncsComponent : public Component {
   std::string manufacturer_{"ESPHome"};
   std::string model_{"ANCS Node"};
   bool auto_fetch_{true};
+  bool ams_{false};
   std::vector<protocol::AttributeId> fetch_attrs_;
   uint8_t call_active_count_{0};
   uint8_t connected_count_{0};
@@ -97,6 +113,7 @@ class AncsComponent : public Component {
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *connected_bs_{nullptr};
   binary_sensor::BinarySensor *call_active_bs_{nullptr};
+  binary_sensor::BinarySensor *media_playing_bs_{nullptr};
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *connected_device_ts_{nullptr};
@@ -105,6 +122,16 @@ class AncsComponent : public Component {
   text_sensor::TextSensor *last_app_id_ts_{nullptr};
   text_sensor::TextSensor *last_caller_ts_{nullptr};
   text_sensor::TextSensor *advertised_name_ts_{nullptr};
+  text_sensor::TextSensor *media_player_ts_{nullptr};
+  text_sensor::TextSensor *media_title_ts_{nullptr};
+  text_sensor::TextSensor *media_artist_ts_{nullptr};
+  text_sensor::TextSensor *media_album_ts_{nullptr};
+  text_sensor::TextSensor *media_playback_state_ts_{nullptr};
+#endif
+#ifdef USE_SENSOR
+  sensor::Sensor *media_position_s_{nullptr};
+  sensor::Sensor *media_duration_s_{nullptr};
+  sensor::Sensor *media_playback_rate_s_{nullptr};
 #endif
 
   CallbackManager<void(const std::string &)> on_connect_;

@@ -1,0 +1,50 @@
+esphome:
+  name: ancs-ams-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+ancs:
+  id: my_ancs
+  ams: true
+
+binary_sensor:
+  - platform: ancs
+    ancs_id: my_ancs
+    connected:
+      name: "iPhone Connected"
+    media_playing:
+      name: "iPhone Media Playing"
+
+text_sensor:
+  - platform: ancs
+    ancs_id: my_ancs
+    media_player:
+      name: "iPhone Media Player"
+    media_title:
+      name: "iPhone Media Title"
+    media_artist:
+      name: "iPhone Media Artist"
+    media_album:
+      name: "iPhone Media Album"
+    media_playback_state:
+      name: "iPhone Playback State"
+
+sensor:
+  - platform: ancs
+    ancs_id: my_ancs
+    media_position:
+      name: "iPhone Media Position"
+    media_duration:
+      name: "iPhone Media Duration"
+    media_playback_rate:
+      name: "iPhone Playback Rate"

@@ -1,6 +1,6 @@
 CXX ?= clang++
 CXXFLAGS := -std=gnu++17 -Wall -Wextra -Werror -I. -I../components/ancs
-SRC := test_ancs_protocol.cpp test_ancs_name.cpp ../components/ancs/ancs_protocol.cpp ../components/ancs/ancs_name_resolver.cpp
+SRC := test_ancs_protocol.cpp test_ancs_name.cpp test_ams_protocol.cpp ../components/ancs/ancs_protocol.cpp ../components/ancs/ancs_name_resolver.cpp ../components/ancs/ams_protocol.cpp
 BIN := build/test_ancs
 
 .PHONY: test clean

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Brian Towles
 
 #include "ancs_ble.h"
+#include "ams_protocol.h"
 #ifdef USE_ESP_IDF
 #include <cstring>
 #include "freertos/FreeRTOS.h"
@@ -62,6 +63,15 @@ static ble_uuid128_t s_ctrl_point_uuid =
 static ble_uuid128_t s_data_src_uuid =
     MK_UUID128(0xFB, 0x7B, 0x7C, 0xCE, 0x6A, 0xB3, 0x44, 0xBE, 0xB5, 0x4B, 0xD6, 0x24, 0xE9, 0xC6, 0xEA, 0x22);
 
+static ble_uuid128_t s_ams_svc_uuid =
+    MK_UUID128(0xDC, 0xF8, 0x55, 0xAD, 0x02, 0xC5, 0xF4, 0x8E, 0x3A, 0x43, 0x36, 0x0F, 0x2B, 0x50, 0xD3, 0x89);
+static ble_uuid128_t s_ams_remote_uuid =
+    MK_UUID128(0xC2, 0x51, 0xCA, 0xF7, 0x56, 0x0E, 0xDF, 0xB8, 0x8A, 0x4A, 0xB1, 0x57, 0xD8, 0x81, 0x3C, 0x9B);
+static ble_uuid128_t s_ams_update_uuid =
+    MK_UUID128(0x02, 0xC1, 0x96, 0xBA, 0x92, 0xBB, 0x0C, 0x9A, 0x1F, 0x41, 0x8D, 0x80, 0xCE, 0xAB, 0x7C, 0x2F);
+static ble_uuid128_t s_ams_attribute_uuid =
+    MK_UUID128(0xD7, 0xD5, 0xBB, 0x70, 0xA8, 0xA3, 0xAB, 0xA6, 0xD8, 0x46, 0xAB, 0x23, 0x8C, 0xF3, 0xB2, 0xC6);
+
 #undef MK_UUID128
 
 // Helper: get const ble_uuid_t* from ble_uuid128_t (safe upcast via first member)
@@ -79,6 +89,15 @@ static inline const ble_uuid_t *u128p(ble_uuid128_t *u) {
 struct ConnState {
   bool active{false};
   bool ancs_ready{false};  // true once CONNECTED event has been pushed
+  bool ams_ready{false};
+  uint16_t ancs_start{0}, ancs_end{0}, ams_start{0}, ams_end{0};
+  uint16_t ams_remote_command_handle{0};
+  uint16_t ams_entity_update_handle{0};
+  uint16_t ams_entity_attribute_handle{0};
+  uint8_t setup_step{0};
+  bool discovering_ams{false};
+  std::string ams_values[6];
+  bool ams_seen[6]{};
   uint16_t conn_handle{BLE_HS_CONN_HANDLE_NONE};
   uint16_t ns_handle{0};
   uint16_t cp_handle{0};
@@ -328,7 +347,8 @@ static int on_disc_svc(uint16_t conn_handle, const struct ble_gatt_error *error,
                        void *arg);
 static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error, const struct ble_gatt_chr *chr,
                        void *arg);
-static void write_cccd_enable(uint16_t conn_handle, uint16_t val_handle);
+static void setup_next(uint16_t conn_handle);
+static void finish_discovery(uint16_t conn_handle);
 static void start_advertising();
 
 // ---------------------------------------------------------------------------
@@ -350,27 +370,61 @@ static int read_device_name_cb(uint16_t conn_handle, const struct ble_gatt_error
     return 0;  // wait for BLE_HS_EDONE to push the event
   }
 
-  // BLE_HS_EDONE or error — no GATTC procedure is in flight now, so write
-  // both CCCDs then mark ready and emit CONNECTED.
-  if (slot->ns_handle)
-    write_cccd_enable(conn_handle, slot->ns_handle);
-  if (slot->ds_handle)
-    write_cccd_enable(conn_handle, slot->ds_handle);
+  // BLE_HS_EDONE or error — no GATTC procedure is in flight now.
   slot->ancs_ready = true;
   BleEvent ev{};
   ev.type = BleEventType::CONNECTED;
   ev.device_name = (slot->peer_name_buf[0] != '\0') ? slot->peer_name_buf : "iPhone";
   push_event(ev);
   ESP_LOGI(TAG, "ANCS ready — connected to: %s", ev.device_name.c_str());
+  setup_next(conn_handle);
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// CCCD enable helper — writes 0x0001 little-endian to val_handle+1
-// ---------------------------------------------------------------------------
-static void write_cccd_enable(uint16_t conn_handle, uint16_t val_handle) {
-  static const uint8_t cccd_val[2] = {0x01, 0x00};
-  ble_gattc_write_flat(conn_handle, val_handle + 1, cccd_val, sizeof(cccd_val), NULL, NULL);
+static int setup_write_cb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr,
+                          void *arg) {
+  (void) attr;
+  (void) arg;
+  ConnState *slot = find_slot(conn_handle);
+  if (!slot) return 0;
+  uint8_t completed = slot->setup_step - 1;
+  if (error->status != 0) {
+    ESP_LOGW(TAG, "GATT setup step %u failed status=%d; ANCS stays connected", completed, error->status);
+    if (completed >= 2) slot->setup_step = 5;  // abandon AMS registration
+  } else if (completed == 2) {
+    ESP_LOGI(TAG, "AMS Entity Update subscribed");
+  } else if (completed == 4) {
+    slot->ams_ready = true;
+    ESP_LOGI(TAG, "AMS ready");
+  }
+  setup_next(conn_handle);
+  return 0;
+}
+
+// One outstanding GATT procedure per connection. ANCS subscriptions precede AMS.
+static void setup_next(uint16_t conn_handle) {
+  ConnState *slot = find_slot(conn_handle);
+  if (!slot) return;
+  static const uint8_t cccd[] = {1, 0};
+  static const uint8_t player[] = {0, 0, 1};
+  static const uint8_t track[] = {2, 0, 1, 2, 3};
+  while (slot->setup_step < 5) {
+    uint8_t step = slot->setup_step++;
+    uint16_t handle = 0;
+    const uint8_t *data = cccd;
+    uint16_t len = sizeof(cccd);
+    if (step == 0 && slot->ns_handle) handle = slot->ns_handle + 1;
+    if (step == 1 && slot->ds_handle) handle = slot->ds_handle + 1;
+    if (step >= 2 && !slot->ams_entity_update_handle) continue;
+    if (step == 2) handle = slot->ams_entity_update_handle + 1;
+    if (step == 3) { handle = slot->ams_entity_update_handle; data = player; len = sizeof(player); }
+    if (step == 4) { handle = slot->ams_entity_update_handle; data = track; len = sizeof(track); }
+    if (!handle) continue;
+    int rc = ble_gattc_write_flat(conn_handle, handle, data, len, setup_write_cb, nullptr);
+    if (rc == 0) return;
+    ESP_LOGW(TAG, "GATT setup step %u could not start rc=%d", step, rc);
+    if (step >= 2) slot->setup_step = 5;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -506,6 +560,38 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         handle_notification_source(buf, copy_len, slot);
       } else if (attr_handle == slot->ds_handle) {
         handle_data_source(buf, copy_len, slot);
+      } else if (s_cfg.ams && attr_handle == slot->ams_entity_update_handle && pkt_len <= sizeof(buf)) {
+        ams::EntityUpdate update;
+        if (!ams::parse_entity_update(buf, copy_len, update)) {
+          ESP_LOGW(TAG, "AMS invalid Entity Update len=%u", copy_len);
+          return 0;
+        }
+        if (update.truncated) {
+          ESP_LOGW(TAG, "AMS entity=%u attribute=%u truncated; skipping partial value", update.entity, update.attribute);
+          return 0;
+        }
+        if (update.entity == 0 && update.attribute == 1) {
+          ams::PlaybackInfo info;
+          if (!ams::parse_playback_info(update.value, info)) {
+            ESP_LOGW(TAG, "AMS invalid PlaybackInfo: %s", update.value.c_str());
+            return 0;
+          }
+        }
+        const uint8_t idx = update.entity == 0 ? update.attribute : 2 + update.attribute;
+        if (slot->ams_seen[idx] && slot->ams_values[idx] == update.value) return 0;
+        slot->ams_seen[idx] = true;
+        slot->ams_values[idx] = update.value;
+        BleEvent ev{};
+        ev.type = BleEventType::AMS_UPDATE;
+        ev.device_name = slot->peer_name_buf;
+        ev.ams_entity = update.entity;
+        ev.ams_attribute = update.attribute;
+        ev.ams_value = std::move(update.value);
+        push_event(ev);
+        ESP_LOGI(TAG, "AMS %s.%s = %s", update.entity == 0 ? "Player" : "Track",
+                 update.entity == 0 ? (update.attribute == 0 ? "Name" : "PlaybackInfo") :
+                 (update.attribute == 0 ? "Artist" : update.attribute == 1 ? "Album" :
+                  update.attribute == 2 ? "Title" : "Duration"), ev.ams_value.c_str());
       }
       return 0;
     }
@@ -539,6 +625,18 @@ static int on_disc_svc(uint16_t conn_handle, const struct ble_gatt_error *error,
 
   if (error->status == BLE_HS_EDONE) {
     ESP_LOGD(TAG, "service discovery complete");
+    ConnState *slot = find_slot(conn_handle);
+    if (slot) {
+      if (s_cfg.ams && !slot->ams_start) ESP_LOGW(TAG, "AMS service unavailable; ANCS continues");
+      if (slot->ancs_start) {
+        int rc = ble_gattc_disc_all_chrs(conn_handle, slot->ancs_start, slot->ancs_end, on_disc_chr, NULL);
+        if (rc != 0) ESP_LOGW(TAG, "ANCS characteristic discovery failed rc=%d", rc);
+      } else if (slot->ams_start) {
+        slot->discovering_ams = true;
+        int rc = ble_gattc_disc_all_chrs(conn_handle, slot->ams_start, slot->ams_end, on_disc_chr, NULL);
+        if (rc != 0) ESP_LOGW(TAG, "AMS characteristic discovery failed rc=%d", rc);
+      }
+    }
     return 0;
   }
   if (error->status != 0) {
@@ -546,18 +644,16 @@ static int on_disc_svc(uint16_t conn_handle, const struct ble_gatt_error *error,
     return 0;
   }
 
+  ConnState *slot = find_slot(conn_handle);
+  if (!slot) return 0;
   if (ble_uuid_cmp(&svc->uuid.u, u128p(&s_ancs_svc_uuid)) == 0) {
-    ConnState *slot = find_slot(conn_handle);
-    if (!slot)
-      return 0;
     ESP_LOGI(TAG, "ANCS service found start=%u end=%u", svc->start_handle, svc->end_handle);
-    slot->ns_handle = 0;
-    slot->cp_handle = 0;
-    slot->ds_handle = 0;
-    int rc = ble_gattc_disc_all_chrs(conn_handle, svc->start_handle, svc->end_handle, on_disc_chr, NULL);
-    if (rc != 0) {
-      ESP_LOGE(TAG, "ble_gattc_disc_all_chrs failed rc=%d", rc);
-    }
+    slot->ancs_start = svc->start_handle;
+    slot->ancs_end = svc->end_handle;
+  } else if (s_cfg.ams && ble_uuid_cmp(&svc->uuid.u, u128p(&s_ams_svc_uuid)) == 0) {
+    ESP_LOGI(TAG, "AMS service found start=%u end=%u", svc->start_handle, svc->end_handle);
+    slot->ams_start = svc->start_handle;
+    slot->ams_end = svc->end_handle;
   }
   return 0;
 }
@@ -573,6 +669,20 @@ static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error,
     return 0;
 
   if (error->status == BLE_HS_EDONE) {
+    if (!slot->discovering_ams && slot->ams_start) {
+      ESP_LOGI(TAG, "ANCS chars done: ns=%u cp=%u ds=%u", slot->ns_handle, slot->cp_handle, slot->ds_handle);
+      slot->discovering_ams = true;
+      int rc = ble_gattc_disc_all_chrs(conn_handle, slot->ams_start, slot->ams_end, on_disc_chr, NULL);
+      if (rc == 0) return 0;
+      ESP_LOGW(TAG, "AMS characteristic discovery failed rc=%d", rc);
+    }
+    if (slot->discovering_ams) {
+      ESP_LOGI(TAG, "AMS characteristics discovered: remote=%u update=%u attribute=%u",
+               slot->ams_remote_command_handle, slot->ams_entity_update_handle, slot->ams_entity_attribute_handle);
+      if (!slot->ams_entity_update_handle) ESP_LOGW(TAG, "AMS Entity Update missing; ANCS remains active");
+      if (!slot->ams_remote_command_handle) ESP_LOGW(TAG, "AMS Remote Command missing; playback monitoring continues");
+      if (!slot->ams_entity_attribute_handle) ESP_LOGW(TAG, "AMS Entity Attribute missing; long values unavailable");
+    }
     ESP_LOGI(TAG, "ANCS chars done: ns=%u cp=%u ds=%u", slot->ns_handle, slot->cp_handle, slot->ds_handle);
 
     // Read device name BEFORE writing CCCDs. NimBLE allows only one GATTC
@@ -584,16 +694,13 @@ static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error,
     int rc = ble_gattc_read_by_uuid(conn_handle, 1, 0xFFFF, u16p(&s_uuid_device_name), read_device_name_cb, nullptr);
     if (rc != 0) {
       ESP_LOGW(TAG, "device name read failed rc=%d — writing CCCDs and connecting anyway", rc);
-      if (slot->ns_handle)
-        write_cccd_enable(conn_handle, slot->ns_handle);
-      if (slot->ds_handle)
-        write_cccd_enable(conn_handle, slot->ds_handle);
       slot->ancs_ready = true;
       BleEvent ev{};
       ev.type = BleEventType::CONNECTED;
       ev.device_name = "iPhone";
       push_event(ev);
       ESP_LOGI(TAG, "ANCS ready — connected to: iPhone");
+      setup_next(conn_handle);
     }
     return 0;
   }
@@ -607,7 +714,11 @@ static int on_disc_chr(uint16_t conn_handle, const struct ble_gatt_error *error,
   // individually here fires three back-to-back ESP_LOGD calls from the
   // nimble_host task during the discovery burst, which interleaves with the
   // main-loop logger on the UART and corrupts the serial stream at VERBOSE.
-  if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_notif_src_uuid)) == 0) {
+  if (slot->discovering_ams) {
+    if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_remote_uuid)) == 0) slot->ams_remote_command_handle = chr->val_handle;
+    else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_update_uuid)) == 0) slot->ams_entity_update_handle = chr->val_handle;
+    else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ams_attribute_uuid)) == 0) slot->ams_entity_attribute_handle = chr->val_handle;
+  } else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_notif_src_uuid)) == 0) {
     slot->ns_handle = chr->val_handle;
   } else if (ble_uuid_cmp(&chr->uuid.u, u128p(&s_ctrl_point_uuid)) == 0) {
     slot->cp_handle = chr->val_handle;

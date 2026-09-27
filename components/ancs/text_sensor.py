@@ -15,6 +15,11 @@ CONF_LAST_MESSAGE = "last_message"
 CONF_LAST_APP_ID = "last_app_id"
 CONF_LAST_CALLER = "last_caller"
 CONF_ADVERTISED_NAME = "advertised_name"
+CONF_MEDIA_PLAYER = "media_player"
+CONF_MEDIA_TITLE = "media_title"
+CONF_MEDIA_ARTIST = "media_artist"
+CONF_MEDIA_ALBUM = "media_album"
+CONF_MEDIA_PLAYBACK_STATE = "media_playback_state"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -28,6 +33,11 @@ CONFIG_SCHEMA = cv.Schema(
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             icon="mdi:bluetooth",
         ),
+        cv.Optional(CONF_MEDIA_PLAYER): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_MEDIA_TITLE): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_MEDIA_ARTIST): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_MEDIA_ALBUM): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_MEDIA_PLAYBACK_STATE): text_sensor.text_sensor_schema(),
     }
 )
 
@@ -38,6 +48,11 @@ _SETTERS = {
     CONF_LAST_APP_ID: "set_last_app_id_text_sensor",
     CONF_LAST_CALLER: "set_last_caller_text_sensor",
     CONF_ADVERTISED_NAME: "set_advertised_name_text_sensor",
+    CONF_MEDIA_PLAYER: "set_media_player_text_sensor",
+    CONF_MEDIA_TITLE: "set_media_title_text_sensor",
+    CONF_MEDIA_ARTIST: "set_media_artist_text_sensor",
+    CONF_MEDIA_ALBUM: "set_media_album_text_sensor",
+    CONF_MEDIA_PLAYBACK_STATE: "set_media_playback_state_text_sensor",
 }
 
 

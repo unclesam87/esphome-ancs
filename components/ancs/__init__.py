@@ -42,6 +42,7 @@ CONF_ON_NOTIFICATION_REMOVED = "on_notification_removed"
 CONF_ON_NOTIFICATION_ATTRIBUTES = "on_notification_attributes"
 
 CONF_AUTO_FETCH_ATTRIBUTES = "auto_fetch_attributes"
+CONF_AMS = "ams"
 CONF_FETCH_ATTRIBUTES = "fetch_attributes"
 CONF_MAX_CONNECTIONS = "max_connections"
 CONF_MANUFACTURER = "manufacturer"
@@ -58,6 +59,7 @@ CONFIG_SCHEMA = cv.Schema(
         # suffix if `esphome: name_add_mac_suffix: true` is set.
         cv.Optional(CONF_NAME): cv.All(cv.string, cv.Length(max=29)),
         cv.Optional(CONF_AUTO_FETCH_ATTRIBUTES, default=True): cv.boolean,
+        cv.Optional(CONF_AMS, default=False): cv.boolean,
         cv.Optional(CONF_FETCH_ATTRIBUTES, default=["app_id", "title", "message"]): cv.ensure_list(
             cv.one_of(*FETCH_ATTRIBUTE_OPTIONS, lower=True)
         ),
@@ -122,6 +124,7 @@ async def to_code(config):
         cg.add(var.set_base_name(config[CONF_NAME]))
         cg.add(var.set_name_configured(True))
     cg.add(var.set_auto_fetch(config[CONF_AUTO_FETCH_ATTRIBUTES]))
+    cg.add(var.set_ams(config[CONF_AMS]))
     cg.add(var.set_manufacturer(config[CONF_MANUFACTURER]))
     cg.add(var.set_model(config[CONF_MODEL]))
     for attr in config[CONF_FETCH_ATTRIBUTES]:
@@ -200,7 +203,10 @@ async def to_code(config):
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_MAX_CONNECTIONS", config[CONF_MAX_CONNECTIONS])
     add_idf_sdkconfig_option("CONFIG_BTDM_CTRL_BLE_MAX_CONN", config[CONF_MAX_CONNECTIONS])
     add_idf_sdkconfig_option("CONFIG_BT_CTRL_BLE_MAX_ACT", config[CONF_MAX_CONNECTIONS])
-    add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_MAX_CCCDS", 2 * config[CONF_MAX_CONNECTIONS] + 2)
+    add_idf_sdkconfig_option(
+        "CONFIG_BT_NIMBLE_MAX_CCCDS",
+        (3 * config[CONF_MAX_CONNECTIONS] + 3) if config[CONF_AMS] else (2 * config[CONF_MAX_CONNECTIONS] + 2),
+    )
     # Override the NimBLE host task stack (default 4096) to prevent the stack
     # overflow during LE Secure Connections pairing — see CONF_NIMBLE_HOST_TASK_STACK_SIZE.
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE", config[CONF_NIMBLE_HOST_TASK_STACK_SIZE])
